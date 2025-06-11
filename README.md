@@ -59,17 +59,16 @@ BUILDPACK_DIR=$(cd $(dirname $0); cd ..; pwd)
 # Load common functions
 source $BUILDPACK_DIR/lib/common.sh
 
-# Configuration - Get latest stable version if not specified
-if [ -z "$RUST_VERSION" ]; then
-    echo "-----> Fetching latest stable Rust version..."
-    RUST_VERSION=$(curl -s https://api.github.com/repos/rust-lang/rust/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    # Remove any non-numeric prefix (like 'v' or 'rust-')
-    RUST_VERSION=$(echo "$RUST_VERSION" | sed 's/^[^0-9]*//')
-    echo "       Latest stable version: $RUST_VERSION"
+# Determine Rust version to use
+if [ -n "$RUST_VERSION" ]; then
+    echo "       Using RUST_VERSION environment variable: $RUST_VERSION"
+else
+    RUST_VERSION=$(get_rust_version "$BUILD_DIR")
+    echo "       Detected Rust version: $RUST_VERSION"
 fi
 
-# Fallback to a known stable version if API call fails
-RUST_VERSION=${RUST_VERSION:-"1.75.0"}
+# Configuration - Default to stable channel
+RUST_VERSION=${RUST_VERSION:-"stable"}
 
 echo "-----> Installing Rust $RUST_VERSION"
 
@@ -77,9 +76,14 @@ echo "-----> Installing Rust $RUST_VERSION"
 RUST_CACHE_DIR="$CACHE_DIR/rust"
 mkdir -p "$RUST_CACHE_DIR"
 
-# Install Rust if not cached
-if [ ! -d "$RUST_CACHE_DIR/bin" ]; then
+# Install Rust if not cached or cache is old
+CACHE_AGE_DAYS=7  # Refresh cache weekly
+if [ ! -d "$RUST_CACHE_DIR/bin" ] || [ $(find "$RUST_CACHE_DIR" -mtime +$CACHE_AGE_DAYS | wc -l) -gt 0 ]; then
     echo "       Downloading and installing Rust..."
+    
+    # Remove old cache if it exists
+    rm -rf "$RUST_CACHE_DIR"
+    mkdir -p "$RUST_CACHE_DIR"
     
     # Download rustup installer
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init.sh
@@ -92,6 +96,12 @@ if [ ! -d "$RUST_CACHE_DIR/bin" ]; then
     rm /tmp/rustup-init.sh
 else
     echo "       Using cached Rust installation"
+    # Update to latest stable if using stable channel
+    if [ "$RUST_VERSION" = "stable" ]; then
+        echo "       Updating stable toolchain..."
+        RUSTUP_HOME="$RUST_CACHE_DIR" CARGO_HOME="$RUST_CACHE_DIR" \
+            "$RUST_CACHE_DIR/bin/rustup" update stable
+    fi
 fi
 
 # Set up Rust environment
@@ -225,11 +235,22 @@ function get_rust_version() {
     local build_dir=$1
     local version="stable"
     
-    # Check for rust-toolchain file
-    if [ -f "$build_dir/rust-toolchain" ]; then
-        version=$(cat "$build_dir/rust-toolchain" | tr -d '\n\r')
-    elif [ -f "$build_dir/rust-toolchain.toml" ]; then
-        version=$(grep 'channel' "$build_dir/rust-toolchain.toml" | sed 's/.*=//g' | tr -d ' "')
+    # Check for rust-toolchain.toml (newer format)
+    if [ -f "$build_dir/rust-toolchain.toml" ]; then
+        if command -v toml >/dev/null 2>&1; then
+            version=$(toml get "$build_dir/rust-toolchain.toml" toolchain.channel 2>/dev/null || echo "stable")
+        else
+            # Fallback parsing without toml tool
+            version=$(grep -E '^\s*channel\s*=' "$build_dir/rust-toolchain.toml" | sed -E 's/.*=\s*"([^"]+)".*/\1/' || echo "stable")
+        fi
+    # Check for rust-toolchain file (legacy format)
+    elif [ -f "$build_dir/rust-toolchain" ]; then
+        version=$(cat "$build_dir/rust-toolchain" | tr -d '\n\r' | head -1)
+    # Check Cargo.toml for rust-version (MSRV)
+    elif [ -f "$build_dir/Cargo.toml" ] && grep -q "rust-version" "$build_dir/Cargo.toml"; then
+        version=$(grep "rust-version" "$build_dir/Cargo.toml" | sed -E 's/.*=\s*"([^"]+)".*/\1/' | head -1)
+        echo "       Found minimum Rust version $version in Cargo.toml, using stable instead"
+        version="stable"  # Use stable even if MSRV is specified
     fi
     
     echo "$version"
