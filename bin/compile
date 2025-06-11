@@ -11,9 +11,16 @@ BUILDPACK_DIR=$(cd $(dirname $0); cd ..; pwd)
 # Load common functions
 source $BUILDPACK_DIR/lib/common.sh
 
-# Configuration
-RUST_VERSION=${RUST_VERSION:-"1.87.0"}
-RUST_URL="https://forge.rust-lang.org/infra/channel-layout.html"
+# Determine Rust version to use
+if [ -n "$RUST_VERSION" ]; then
+    echo "       Using RUST_VERSION environment variable: $RUST_VERSION"
+else
+    RUST_VERSION=$(get_rust_version "$BUILD_DIR")
+    echo "       Detected Rust version: $RUST_VERSION"
+fi
+
+# Configuration - Default to stable channel
+RUST_VERSION=${RUST_VERSION:-"stable"}
 
 echo "-----> Installing Rust $RUST_VERSION"
 
@@ -21,9 +28,14 @@ echo "-----> Installing Rust $RUST_VERSION"
 RUST_CACHE_DIR="$CACHE_DIR/rust"
 mkdir -p "$RUST_CACHE_DIR"
 
-# Install Rust if not cached
-if [ ! -d "$RUST_CACHE_DIR/bin" ]; then
+# Install Rust if not cached or cache is old
+CACHE_AGE_DAYS=7  # Refresh cache weekly
+if [ ! -d "$RUST_CACHE_DIR/bin" ] || [ $(find "$RUST_CACHE_DIR" -mtime +$CACHE_AGE_DAYS | wc -l) -gt 0 ]; then
     echo "       Downloading and installing Rust..."
+    
+    # Remove old cache if it exists
+    rm -rf "$RUST_CACHE_DIR"
+    mkdir -p "$RUST_CACHE_DIR"
     
     # Download rustup installer
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init.sh
@@ -36,6 +48,12 @@ if [ ! -d "$RUST_CACHE_DIR/bin" ]; then
     rm /tmp/rustup-init.sh
 else
     echo "       Using cached Rust installation"
+    # Update to latest stable if using stable channel
+    if [ "$RUST_VERSION" = "stable" ]; then
+        echo "       Updating stable toolchain..."
+        RUSTUP_HOME="$RUST_CACHE_DIR" CARGO_HOME="$RUST_CACHE_DIR" \
+            "$RUST_CACHE_DIR/bin/rustup" update stable
+    fi
 fi
 
 # Set up Rust environment
