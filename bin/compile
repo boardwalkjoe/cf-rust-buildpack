@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Copy the compile script content from the guide
-
-#!/usr/bin/env bash
 # bin/compile
 
 set -eo pipefail
@@ -15,7 +12,7 @@ BUILDPACK_DIR=$(cd $(dirname $0); cd ..; pwd)
 source $BUILDPACK_DIR/lib/common.sh
 
 # Configuration
-RUST_VERSION=${RUST_VERSION:-"1.75.0"}
+RUST_VERSION=${RUST_VERSION:-"1.87.0"}
 RUST_URL="https://forge.rust-lang.org/infra/channel-layout.html"
 
 echo "-----> Installing Rust $RUST_VERSION"
