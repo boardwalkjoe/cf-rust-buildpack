@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Copy the release script content from the guide
+
+#!/usr/bin/env bash
+# bin/release
+
+BUILD_DIR=$1
+
+# Check if this appears to be a web application
+if [ -f "$BUILD_DIR/Cargo.toml" ] && grep -q -E "(actix-web|warp|rocket|axum|tide)" "$BUILD_DIR/Cargo.toml"; then
+    # Web application - default to PORT environment variable
+    cat << EOF
+---
+default_process_types:
+  web: ./start.sh
+config_vars:
+  RUST_LOG: info
+EOF
+else
+    # CLI application
+    cat << EOF
+---
+default_process_types:
+  console: ./start.sh
+config_vars:
+  RUST_LOG: info
+EOF
+fi

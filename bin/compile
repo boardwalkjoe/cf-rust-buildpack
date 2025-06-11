@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Copy the compile script content from the guide
+
+#!/usr/bin/env bash
+# bin/compile
+
+set -eo pipefail
+
+BUILD_DIR=$1
+CACHE_DIR=$2
+ENV_DIR=$3
+BUILDPACK_DIR=$(cd $(dirname $0); cd ..; pwd)
+
+# Load common functions
+source $BUILDPACK_DIR/lib/common.sh
+
+# Configuration
+RUST_VERSION=${RUST_VERSION:-"1.75.0"}
+RUST_URL="https://forge.rust-lang.org/infra/channel-layout.html"
+
+echo "-----> Installing Rust $RUST_VERSION"
+
+# Create cache directory for Rust installation
+RUST_CACHE_DIR="$CACHE_DIR/rust"
+mkdir -p "$RUST_CACHE_DIR"
+
+# Install Rust if not cached
+if [ ! -d "$RUST_CACHE_DIR/bin" ]; then
+    echo "       Downloading and installing Rust..."
+    
+    # Download rustup installer
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init.sh
+    chmod +x /tmp/rustup-init.sh
+    
+    # Install Rust to cache directory
+    RUSTUP_HOME="$RUST_CACHE_DIR" CARGO_HOME="$RUST_CACHE_DIR" \
+        /tmp/rustup-init.sh -y --default-toolchain $RUST_VERSION --no-modify-path
+    
+    rm /tmp/rustup-init.sh
+else
+    echo "       Using cached Rust installation"
+fi
+
+# Set up Rust environment
+export RUSTUP_HOME="$RUST_CACHE_DIR"
+export CARGO_HOME="$RUST_CACHE_DIR"
+export PATH="$RUST_CACHE_DIR/bin:$PATH"
+
+# Copy Rust installation to build directory
+echo "-----> Setting up Rust environment"
+cp -r "$RUST_CACHE_DIR" "$BUILD_DIR/.rust"
+
+# Set up Cargo cache
+CARGO_CACHE_DIR="$CACHE_DIR/cargo"
+mkdir -p "$CARGO_CACHE_DIR"
+
+# Link cargo cache to build directory
+mkdir -p "$BUILD_DIR/.cargo"
+if [ -d "$CARGO_CACHE_DIR/registry" ]; then
+    ln -sf "$CARGO_CACHE_DIR/registry" "$BUILD_DIR/.cargo/registry"
+fi
+if [ -d "$CARGO_CACHE_DIR/git" ]; then
+    ln -sf "$CARGO_CACHE_DIR/git" "$BUILD_DIR/.cargo/git"
+fi
+
+# Set environment for compilation
+export CARGO_HOME="$BUILD_DIR/.cargo"
+export RUSTUP_HOME="$BUILD_DIR/.rust"
+export PATH="$BUILD_DIR/.rust/bin:$PATH"
+
+echo "-----> Building Rust application"
+cd "$BUILD_DIR"
+
+# Check if this is a web application (has dependencies like actix-web, warp, etc.)
+if grep -q -E "(actix-web|warp|rocket|axum|tide)" Cargo.toml; then
+    echo "       Detected web framework"
+    WEB_APP=true
+else
+    WEB_APP=false
+fi
+
+# Build the application in release mode
+cargo build --release
+
+# Copy cargo cache back for next build
+cp -r "$BUILD_DIR/.cargo/registry" "$CARGO_CACHE_DIR/" 2>/dev/null || true
+cp -r "$BUILD_DIR/.cargo/git" "$CARGO_CACHE_DIR/" 2>/dev/null || true
+
+# Create start script
+echo "-----> Creating startup script"
+cat > "$BUILD_DIR/start.sh" << 'EOF'
+#!/usr/bin/env bash
+
+export RUSTUP_HOME="/app/.rust"
+export CARGO_HOME="/app/.cargo"
+export PATH="/app/.rust/bin:$PATH"
+
+# Find the binary to run
+BINARY_NAME=$(find target/release -maxdepth 1 -type f -executable ! -name "*.so" ! -name "*.d" | head -1)
+
+if [ -z "$BINARY_NAME" ]; then
+    echo "Error: No executable binary found in target/release"
+    exit 1
+fi
+
+echo "Starting $(basename $BINARY_NAME)..."
+exec "$BINARY_NAME" "$@"
+EOF
+
+chmod +x "$BUILD_DIR/start.sh"
+
+echo "-----> Rust buildpack compilation complete"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Copy the detect script content from the guide
+
+#!/usr/bin/env bash
+# bin/detect
+
+BUILD_DIR=$1
+
+# Check for Cargo.toml (primary indicator of a Rust project)
+if [ -f "$BUILD_DIR/Cargo.toml" ]; then
+    echo "Rust"
+    exit 0
+fi
+
+# Check for main.rs or lib.rs as secondary indicators
+if [ -f "$BUILD_DIR/src/main.rs" ] || [ -f "$BUILD_DIR/src/lib.rs" ]; then
+    echo "Rust"
+    exit 0
+fi
+
+# Not a Rust application
+exit 1
